@@ -1,80 +1,85 @@
-import os
-import urllib
-
-from google.appengine.api import users
-from google.appengine.ext import ndb
-
-import jinja2
 import webapp2
 
+import cgi
+import urllib
 
-JINJA_ENVIRONMENT = jinja2.Environment(
-    loader=jinja2.FileSystemLoader(os.path.dirname(__file__)),
-    extensions=['jinja2.ext.autoescape'],
-    autoescape=True)
+from google.appengine.ext import ndb
 
-DEFAULT_GUESTBOOK_NAME = 'default_guestbook'
+def event_key(name):
+    return ndb.Key('Event', name)
 
-# We set a parent key on the 'Greetings' to ensure that they are all in the same
-# entity group. Queries across the single entity group will be consistent.
-# However, the write rate should be limited to ~1/second.
+class User(ndb.Model):
+    username = ndb.StringProperty()
 
-def guestbook_key(guestbook_name=DEFAULT_GUESTBOOK_NAME):
-    """Constructs a Datastore key for a Guestbook entity with guestbook_name."""
-    return ndb.Key('Guestbook', guestbook_name)
-
-class Greeting(ndb.Model):
-    """Models an individual Guestbook entry."""
-    author = ndb.UserProperty()
-    content = ndb.StringProperty(indexed=False)
-    date = ndb.DateTimeProperty(auto_now_add=True)
+class Event(ndb.Model):
+    name = ndb.StringProperty()
+    location = ndb.StringProperty()
+    distance = ndb.IntegerProperty()
 
 class MainPage(webapp2.RequestHandler):
-
+    # Responds to GET HTTP request
     def get(self):
-        guestbook_name = self.request.get('guestbook_name',
-                                          DEFAULT_GUESTBOOK_NAME)
-        greetings_query = Greeting.query(
-            ancestor=guestbook_key(guestbook_name)).order(-Greeting.date)
-        greetings = greetings_query.fetch(10)
-
-        if users.get_current_user():
-            url = users.create_logout_url(self.request.uri)
-            url_linktext = 'Logout'
-        else:
-            url = users.create_login_url(self.request.uri)
-            url_linktext = 'Login'
-
-        template_values = {
-            'greetings': greetings,
-            'guestbook_name': urllib.quote_plus(guestbook_name),
-            'url': url,
-            'url_linktext': url_linktext,
-        }
-
-        template = JINJA_ENVIRONMENT.get_template('index.html')
-        self.response.write(template.render(template_values))
-
-class Guestbook(webapp2.RequestHandler):
+        # Query the datastore for all the locations of current events
+        qry = Event.query()
+        response_string = ""
+        for event in qry.fetch():
+            response_string += "["
+            response_string += event.location
+            response_string += ","
+            response_string += str(event.distance)
+            response_string += "]"
+        self.response.headers['Content-Type'] = 'text/plain'
+        # Writes response on screen
+        self.response.write(response_string)
+        
+    # Creates an event    
     def post(self):
-        # We set the same parent key on the 'Greeting' to ensure each Greeting
-        # is in the same entity group. Queries across the single entity group
-        # will be consistent. However, the write rate to a single entity group
-        # should be limited to ~1/second.
-        guestbook_name = self.request.get('guestbook_name',
-                                          DEFAULT_GUESTBOOK_NAME)
-        greeting = Greeting(parent=guestbook_key(guestbook_name))
+        event_name = self.request.get('event')
+        event_loc = self.request.get('loc')
+        event_dist = self.request.get('dist')
+        
+        event = Event()
+        event.name = event_name
+        event.location = event_loc
+        event.distance = int(event_dist)
+        event.put()
+        self.response.write('Event added to database')
 
-        if users.get_current_user():
-            greeting.author = users.get_current_user()
-
-        greeting.content = self.request.get('content')
-        greeting.put()
-
-        query_params = {'guestbook_name': guestbook_name}
-        self.redirect('/?' + urllib.urlencode(query_params))
-
+# Adds a user to an event
+class UserManagement(webapp2.RequestHandler):
+    def post(self):
+        # for response  
+        self.response.headers['Content-Type'] = 'text/plain'
+        # get the event name from the request
+        event_name = self.request.get('event')
+        
+        
+        # if no event name given, delete the user from the event
+        if len(event_name) == 0:
+            username = self.request.get('username')
+            #que = User.query(User.username == username).fetch(keys_only=True)
+            #ndb.delete_multi(que)
+            ndb.Key(User, int(username)).delete()
+            self.response.write('User deleted! ')
+            
+            
+        # otherwise add a user to an event
+        else:
+            # Check to see if the event actualy exists
+            qry = Event.query(Event.name == event_name)
+            if qry.get() == None:
+                self.response.write("Wrong event name! " + event_name)
+                return
+            # gives the user the parent by getting the key of the event if the event exists
+            user = User(parent=ndb.Key(Event, event_name))
+            user.username = self.request.get('username')
+            user.put()
+            # self.response.write('Post received!' + user.username)
+            self.response.write('Post received! event name = '+ event_name)
+        
+    
+#the address
 application = webapp2.WSGIApplication([
     ('/', MainPage),
-    ('/sign', Guestbook),
-], debug=True)	
+    ('/user', UserManagement),
+], debug=True)
